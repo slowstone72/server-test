@@ -7,7 +7,6 @@ import { createServer } from "node:http";
 
 const port = process.env.PORT || 1234;
 const beVerbose = false;
-// const defaultName = "Guest";
 
 if (beVerbose) console.log("beep boop, looks like I'm on the air");
 
@@ -19,10 +18,10 @@ const io = new Server(server, {
     }
 });
 
-app.get("/", (req, res) => {
+/* app.get("/", (req, res) => {
     res.send("<u>hello, looks like i'm internetting</u>");
     // 301 perm, 302 temp
-});
+}); */
 
 server.listen(port, () => {
     if (beVerbose) console.log(`server launched @ ${port}`);
@@ -36,12 +35,12 @@ let chatHistory = [{
     "m": "Hello, send a nice message :-)"
 }];
 
-let maxIdleTime = 120000;
-let lastNewClient = Date.now();
-let clientCeiling = 20;
-let maxClients = 20;
+let maxIdleTime = 60000;
+let pulseTime = 40000
+let lastNewClient = Date.now(); // for tracking abnormal connections
+let clientCeiling = 20; // max max clients
+let maxClients = 20; // "max" clients
 let clients = [];
-
 
 const updateClients = () => {
     let filteredClients = [];
@@ -55,12 +54,23 @@ const updateClients = () => {
     io.emit("max", maxClients);
 }
 
+const sayBye = (client, code) => {
+    if (!code) {
+        client.socket.emit("bye", "kick");
+    } else {
+        client.socket.emit("bye", code);
+    }
+    client.socket.disconnect();
+    clients.splice(clients.indexOf(client), 1);
+    updateClients();
+}
+
 io.on("connection", socket => {
     let nowDate = Date.now();
     if (nowDate - lastNewClient < 50 && maxClients > 3) maxClients -= 3;
     lastNewClient = nowDate;
-    if (clients.length > maxClients) {
-        socket.emit("bye");
+    if (clients.length + 1 > maxClients) {
+        socket.emit("bye", "busy");
         socket.disconnect();
         return;
     }
@@ -69,7 +79,6 @@ io.on("connection", socket => {
         id: Math.floor(Math.random() * 90000),
         lastPulse: nowDate,
         lastActive: nowDate,
-        lastMessageDate: nowDate,
         lastMessage: ""
     }
     client.name = `Guest${client.id}`;
@@ -77,17 +86,11 @@ io.on("connection", socket => {
     if (beVerbose) console.log(`connect #${client.id}`);
     updateClients();
     socket.emit("chistory", chatHistory);
-    let sayBye = () => {
-        socket.emit("bye");
-        socket.disconnect();
-    }
+    socket.emit("p", pulseTime);
     socket.on("disconnect", () => {
         if (beVerbose) console.log(`disconnect #${client.id}`);
         clients.splice(clients.indexOf(client), 1);
         updateClients();
-    });
-    socket.on("p", () => {
-        client.lastPulse = Date.now();
     });
     socket.on("msg", msg => {
         let nowDate = Date.now();
@@ -114,23 +117,18 @@ io.on("connection", socket => {
 const clientPulseChecker = setInterval(() => {
     if (maxClients < clientCeiling) maxClients ++;
     clients.forEach(client => {
-        // check pulse:
-         if (Date.now() - client.lastPulse > 65000) { // 5 second breathing room
-            if (beVerbose) console.log(`disconnect #${client.id} (no pulse)`);
-            client.socket.emit("bye");
-            client.socket.disconnect();
-            let index = clients.indexOf(client);
-            clients.splice(index, 1);
-            updateClients();
+        // check user activity:
+        if (Date.now() - client.lastPulse > pulseTime) {
+            if (beVerbose) console.log(`disconnect #${client.id} (nopulse)`);
+            sayBye(client, "nopulse");
+            return;
         }
         // check user activity:
-        if (Date.now() - client.lastActivity > maxIdleTime) {
+        if (Date.now() - client.lastActive > maxIdleTime) {
             if (beVerbose) console.log(`disconnect #${client.id} (idle)`);
-            client.socket.emit("bye");
-            client.socket.disconnect();
-            let index = clients.indexOf(client);
-            clients.splice(index, 1);
-            updateClients();
+            sayBye(client, "idle");
         }
     });
-}, 60000);
+}, maxIdleTime > pulseTime ? pulseTime : maxIdleTime);
+
+console.log(maxIdleTime > pulseTime ? pulseTime : maxIdleTime)
